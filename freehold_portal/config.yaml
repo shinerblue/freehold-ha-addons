@@ -1,0 +1,40 @@
+name: Freehold Captive Portal
+version: "0.1.0"
+slug: freehold_portal
+description: >-
+  On-prem captive WiFi portal — captures every guest's email and authorizes
+  them onto the internet via the local UniFi gateway (ADR-006).
+url: https://github.com/shinerblue/freehold/tree/main/apps/portal/addon
+arch:
+  - aarch64
+  - amd64
+init: false
+host_network: false
+ports:
+  8099/tcp: 80
+ports_description:
+  8099/tcp: Captive portal HTTP on host port 80 (UniFi external portal target)
+options:
+  unifi_host: "https://192.168.1.1"
+  unifi_site: "default"
+  unifi_username: ""
+  unifi_password: ""
+  unifi_verify_tls: false
+  org_id: ""
+  default_property_id: ""
+  ssid_map: "{}"
+  authorize_minutes: 1440
+  property_name: "Guest WiFi"
+  primary_color: "#2563eb"
+schema:
+  unifi_host: str
+  unifi_site: str
+  unifi_username: str
+  unifi_password: password
+  unifi_verify_tls: bool
+  org_id: str
+  default_property_id: str?
+  ssid_map: str
+  authorize_minutes: int
+  property_name: str?
+  primary_color: str?
