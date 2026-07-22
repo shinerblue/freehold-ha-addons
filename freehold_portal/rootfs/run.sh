@@ -24,6 +24,14 @@ if bashio::config.has_value 'default_property_id'; then
   export PORTAL_DEFAULT_PROPERTY_ID="$(bashio::config 'default_property_id')"
 fi
 
+if bashio::config.has_value 'capture_api_url'; then
+  export PORTAL_CAPTURE_API_URL="$(bashio::config 'capture_api_url')"
+fi
+
+if bashio::config.has_value 'capture_api_token'; then
+  export PORTAL_CAPTURE_API_TOKEN="$(bashio::config 'capture_api_token')"
+fi
+
 export PORTAL_BRANDING="$(jq -n \
   --arg n "$(bashio::config 'property_name')" \
   --arg c "$(bashio::config 'primary_color')" \

@@ -4097,6 +4097,19 @@ function renderSplashHtml(ctx) {
   const wifiConsentText = b.wifiConsentText ?? "I agree to the WiFi terms of use.";
   const marketingConsentText = b.marketingConsentText ?? "Send me deals and updates for future stays (optional).";
   const logo = b.logoUrl && /^https?:\/\//.test(b.logoUrl) ? `<img class="logo" src="${esc(b.logoUrl)}" alt="" />` : "";
+  const policy = ctx.capturePolicy;
+  const required = (enabled) => enabled ? " required" : "";
+  const captureFields = policy.enabled ? [
+    '<label for="fullName">Name</label>',
+    `<input id="fullName" name="fullName" type="text" autocomplete="name"${required(policy.requireName)} />`,
+    '<label for="email">Email</label>',
+    `<input id="email" name="email" type="email" autocomplete="email"${required(policy.requireEmail)} />`,
+    ...policy.collectPhone ? [
+      '<label for="phone">Mobile (optional)</label>',
+      '<input id="phone" name="phone" type="tel" autocomplete="tel" />'
+    ] : [],
+    ...policy.offerEmailUpdates ? [`<div class="check"><input id="emailConsent" name="emailConsent" type="checkbox" value="on" /><label for="emailConsent" style="font-weight:400;margin:0">${esc(marketingConsentText)}</label></div>`] : []
+  ] : [];
   return [
     "<!doctype html>",
     '<html lang="en"><head>',
@@ -4119,20 +4132,15 @@ function renderSplashHtml(ctx) {
     '<form class="card" method="post" action="/portal/capture">',
     logo,
     `<h1>Welcome to ${name}</h1>`,
-    '<p class="sub">Connect to WiFi \u2014 just tell us where to send your details.</p>',
+    `<p class="sub">${policy.enabled ? "Connect to WiFi \u2014 tell us who is joining." : "Connect to the guest WiFi."}</p>`,
     `<input type="hidden" name="propertyId" value="${esc(ctx.propertyId)}" />`,
     `<input type="hidden" name="clientMac" value="${esc(ctx.clientMac)}" />`,
     `<input type="hidden" name="url" value="${esc(ctx.originalUrl ?? "")}" />`,
+    `<input type="hidden" name="captureEnabled" value="${policy.enabled ? "1" : "0"}" />`,
     `<input type="hidden" name="consentTextWifi" value="${esc(wifiConsentText)}" />`,
     `<input type="hidden" name="consentTextMarketing" value="${esc(marketingConsentText)}" />`,
-    '<label for="fullName">Name</label>',
-    '<input id="fullName" name="fullName" type="text" autocomplete="name" />',
-    '<label for="email">Email</label>',
-    '<input id="email" name="email" type="email" autocomplete="email" />',
-    '<label for="phone">Mobile (optional)</label>',
-    '<input id="phone" name="phone" type="tel" autocomplete="tel" />',
+    ...captureFields,
     `<div class="check"><input id="wifi" type="checkbox" checked disabled /><label for="wifi" style="font-weight:400;margin:0">${esc(wifiConsentText)}</label></div>`,
-    `<div class="check"><input id="emailConsent" name="emailConsent" type="checkbox" value="on" /><label for="emailConsent" style="font-weight:400;margin:0">${esc(marketingConsentText)}</label></div>`,
     '<button type="submit">Connect</button>',
     "</form>",
     "</body></html>"
@@ -4158,6 +4166,16 @@ async function handlePortalRequest(req, config2) {
     if (!propertyId2) {
       return html(404, "<h1>Unknown network</h1><p>This WiFi network is not configured.</p>");
     }
+    const capturePolicy = await config2.captureClient.getPolicy(propertyId2).catch((err) => {
+      console.error("[portal] policy lookup failed; capture disabled for this request", err);
+      return {
+        enabled: false,
+        requireName: false,
+        requireEmail: false,
+        collectPhone: false,
+        offerEmailUpdates: false
+      };
+    });
     return html(
       200,
       renderSplashHtml({
@@ -4166,7 +4184,8 @@ async function handlePortalRequest(req, config2) {
         apMac: hs.apMac,
         originalUrl: hs.originalUrl,
         ssid: hs.ssid,
-        branding: config2.branding
+        branding: config2.branding,
+        capturePolicy
       })
     );
   }
@@ -4178,17 +4197,19 @@ async function handlePortalRequest(req, config2) {
     return html(400, "<h1>Missing required fields</h1>");
   }
   try {
-    await config2.captureClient.capture({
-      propertyId,
-      fullName: emptyToNull(body["fullName"]),
-      email: emptyToNull(body["email"]),
-      phone: emptyToNull(body["phone"]),
-      clientMac,
-      emailConsent: checkboxOn(body["emailConsent"]),
-      smsConsent: checkboxOn(body["smsConsent"]),
-      consentTextWifi: emptyToNull(body["consentTextWifi"]),
-      consentTextMarketing: emptyToNull(body["consentTextMarketing"])
-    });
+    if (checkboxOn(body["captureEnabled"])) {
+      await config2.captureClient.capture({
+        propertyId,
+        fullName: emptyToNull(body["fullName"]),
+        email: emptyToNull(body["email"]),
+        phone: emptyToNull(body["phone"]),
+        clientMac,
+        emailConsent: checkboxOn(body["emailConsent"]),
+        smsConsent: checkboxOn(body["smsConsent"]),
+        consentTextWifi: emptyToNull(body["consentTextWifi"]),
+        consentTextMarketing: emptyToNull(body["consentTextMarketing"])
+      });
+    }
   } catch (err) {
     console.error("[portal] capture failed (continuing to authorize)", err);
   }
@@ -4335,6 +4356,15 @@ function getGuestAuthService(settings) {
 
 // src/server.ts
 var LogCaptureClient = class {
+  async getPolicy() {
+    return {
+      enabled: true,
+      requireName: false,
+      requireEmail: false,
+      collectPhone: true,
+      offerEmailUpdates: true
+    };
+  }
   async capture(input) {
     console.log(
       "[portal] capture",
@@ -4348,6 +4378,36 @@ var LogCaptureClient = class {
       })
     );
     return { ok: true };
+  }
+};
+var HttpCaptureClient = class {
+  constructor(baseUrl, token) {
+    this.baseUrl = baseUrl;
+    this.token = token;
+  }
+  headers() {
+    return { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" };
+  }
+  async getPolicy(propertyId) {
+    const response = await fetch(
+      `${this.baseUrl}/config?propertyId=${encodeURIComponent(propertyId)}`,
+      { headers: this.headers(), signal: AbortSignal.timeout(3e3) }
+    );
+    if (!response.ok) throw new Error(`capture policy HTTP ${response.status}`);
+    const body = await response.json();
+    if (!body.ok || !body.policy) throw new Error("capture policy response invalid");
+    return body.policy;
+  }
+  async capture(input) {
+    const response = await fetch(`${this.baseUrl}/capture`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(5e3)
+    });
+    if (!response.ok) throw new Error(`capture HTTP ${response.status}`);
+    const body = await response.json();
+    return { ok: body.ok === true };
   }
 };
 function readEnvConfig() {
@@ -4367,11 +4427,14 @@ function readEnvConfig() {
       verifyTls: process.env["UNIFI_VERIFY_TLS"] === "1"
     }
   });
+  const captureBaseUrl = process.env["PORTAL_CAPTURE_API_URL"]?.replace(/\/$/, "");
+  const captureToken = process.env["PORTAL_CAPTURE_API_TOKEN"];
+  const captureClient = captureBaseUrl && captureToken ? new HttpCaptureClient(captureBaseUrl, captureToken) : new LogCaptureClient();
   return {
     orgId: process.env["FREEHOLD_ORG_ID"] ?? "",
     resolvePropertyId: (ssid) => ssid ? ssidMap[ssid] ?? defaultPropertyId : defaultPropertyId,
     authService,
-    captureClient: new LogCaptureClient(),
+    captureClient,
     branding,
     authorizeMinutes: process.env["PORTAL_AUTHORIZE_MINUTES"] ? Number(process.env["PORTAL_AUTHORIZE_MINUTES"]) : 1440
   };
