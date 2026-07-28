@@ -1,5 +1,5 @@
 name: Freehold Captive Portal
-version: "0.2.0"
+version: "0.3.0"
 slug: freehold_portal
 description: >-
   On-prem captive WiFi portal — captures every guest's email and authorizes
@@ -28,6 +28,8 @@ options:
   primary_color: "#2563eb"
   capture_api_url: ""
   capture_api_token: ""
+  access_gate: false
+  access_names: ""
 schema:
   unifi_host: str
   unifi_site: str
@@ -42,3 +44,5 @@ schema:
   primary_color: str?
   capture_api_url: str?
   capture_api_token: password?
+  access_gate: bool
+  access_names: str?

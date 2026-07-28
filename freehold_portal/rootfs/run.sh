@@ -32,6 +32,16 @@ if bashio::config.has_value 'capture_api_token'; then
   export PORTAL_CAPTURE_API_TOKEN="$(bashio::config 'capture_api_token')"
 fi
 
+if bashio::config.true 'access_gate'; then
+  export PORTAL_ACCESS_GATE="1"
+else
+  export PORTAL_ACCESS_GATE="0"
+fi
+
+if bashio::config.has_value 'access_names'; then
+  export PORTAL_ACCESS_NAMES="$(bashio::config 'access_names')"
+fi
+
 export PORTAL_BRANDING="$(jq -n \
   --arg n "$(bashio::config 'property_name')" \
   --arg c "$(bashio::config 'primary_color')" \

@@ -4099,6 +4099,11 @@ function renderSplashHtml(ctx) {
   const logo = b.logoUrl && /^https?:\/\//.test(b.logoUrl) ? `<img class="logo" src="${esc(b.logoUrl)}" alt="" />` : "";
   const policy = ctx.capturePolicy;
   const required = (enabled) => enabled ? " required" : "";
+  const errorBanner = ctx.errorMessage ? [`<div class="err" role="alert">${esc(ctx.errorMessage)}</div>`] : [];
+  const accessField = ctx.accessGate ? [
+    '<label for="accessName">Last name on the reservation</label>',
+    '<input id="accessName" name="accessName" type="text" autocomplete="family-name" required />'
+  ] : [];
   const captureFields = policy.enabled ? [
     '<label for="fullName">Name</label>',
     `<input id="fullName" name="fullName" type="text" autocomplete="name"${required(policy.requireName)} />`,
@@ -4126,6 +4131,7 @@ function renderSplashHtml(ctx) {
     "label{display:block;font-size:.85rem;font-weight:600;margin:12px 0 4px}",
     "input[type=text],input[type=email],input[type=tel]{width:100%;box-sizing:border-box;padding:11px;border:1px solid #d2d2d7;border-radius:10px;font-size:1rem}",
     ".check{display:flex;gap:8px;align-items:flex-start;margin-top:14px;font-size:.85rem;color:#333}",
+    ".err{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:.9rem}",
     "button{width:100%;margin-top:20px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font-size:1rem;font-weight:600;cursor:pointer}",
     "</style>",
     "</head><body>",
@@ -4139,6 +4145,8 @@ function renderSplashHtml(ctx) {
     `<input type="hidden" name="captureEnabled" value="${policy.enabled ? "1" : "0"}" />`,
     `<input type="hidden" name="consentTextWifi" value="${esc(wifiConsentText)}" />`,
     `<input type="hidden" name="consentTextMarketing" value="${esc(marketingConsentText)}" />`,
+    ...errorBanner,
+    ...accessField,
     ...captureFields,
     `<div class="check"><input id="wifi" type="checkbox" checked disabled /><label for="wifi" style="font-weight:400;margin:0">${esc(wifiConsentText)}</label></div>`,
     '<button type="submit">Connect</button>',
@@ -4159,6 +4167,16 @@ function emptyToNull(v) {
 function checkboxOn(v) {
   return v === "on" || v === "true" || v === "1";
 }
+function normalizeAccessName(v) {
+  return v.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+var CAPTURE_POLICY_DISABLED = {
+  enabled: false,
+  requireName: false,
+  requireEmail: false,
+  collectPhone: false,
+  offerEmailUpdates: false
+};
 async function handlePortalRequest(req, config2) {
   if (req.method === "GET") {
     const hs = parseHandshake(req.query);
@@ -4185,7 +4203,8 @@ async function handlePortalRequest(req, config2) {
         originalUrl: hs.originalUrl,
         ssid: hs.ssid,
         branding: config2.branding,
-        capturePolicy
+        capturePolicy,
+        accessGate: config2.accessGate === true
       })
     );
   }
@@ -4195,6 +4214,28 @@ async function handlePortalRequest(req, config2) {
   const originalUrl = sanitizeRedirect(body["url"] ?? null);
   if (!clientMac || !propertyId) {
     return html(400, "<h1>Missing required fields</h1>");
+  }
+  if (config2.accessGate === true) {
+    const supplied = normalizeAccessName(body["accessName"] ?? "");
+    const accepted = (config2.accessNames ?? []).map(normalizeAccessName).filter((s) => s.length > 0);
+    const matched = supplied.length > 0 && accepted.includes(supplied);
+    if (!matched) {
+      const capturePolicy = await config2.captureClient.getPolicy(propertyId).catch(() => CAPTURE_POLICY_DISABLED);
+      return html(
+        200,
+        renderSplashHtml({
+          propertyId,
+          clientMac,
+          apMac: null,
+          originalUrl,
+          ssid: null,
+          branding: config2.branding,
+          capturePolicy,
+          accessGate: true,
+          errorMessage: accepted.length === 0 ? "Guest WiFi is not active right now. If you are a current guest, please contact your host." : "That name doesn\u2019t match the reservation. Please enter the last name used for the booking."
+        })
+      );
+    }
   }
   try {
     if (checkboxOn(body["captureEnabled"])) {
@@ -4436,7 +4477,9 @@ function readEnvConfig() {
     authService,
     captureClient,
     branding,
-    authorizeMinutes: process.env["PORTAL_AUTHORIZE_MINUTES"] ? Number(process.env["PORTAL_AUTHORIZE_MINUTES"]) : 1440
+    authorizeMinutes: process.env["PORTAL_AUTHORIZE_MINUTES"] ? Number(process.env["PORTAL_AUTHORIZE_MINUTES"]) : 1440,
+    accessGate: process.env["PORTAL_ACCESS_GATE"] === "1",
+    accessNames: (process.env["PORTAL_ACCESS_NAMES"] ?? "").split(",").map((s) => s.trim()).filter((s) => s.length > 0)
   };
 }
 function readBody(req) {
