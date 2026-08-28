@@ -4177,6 +4177,10 @@ var CAPTURE_POLICY_DISABLED = {
   collectPhone: false,
   offerEmailUpdates: false
 };
+var POLICY_LOOKUP_DISABLED = {
+  policy: CAPTURE_POLICY_DISABLED,
+  accessNames: []
+};
 async function handlePortalRequest(req, config2) {
   if (req.method === "GET") {
     const hs = parseHandshake(req.query);
@@ -4184,15 +4188,9 @@ async function handlePortalRequest(req, config2) {
     if (!propertyId2) {
       return html(404, "<h1>Unknown network</h1><p>This WiFi network is not configured.</p>");
     }
-    const capturePolicy = await config2.captureClient.getPolicy(propertyId2).catch((err) => {
+    const { policy: capturePolicy } = await config2.captureClient.getPolicy(propertyId2).catch((err) => {
       console.error("[portal] policy lookup failed; capture disabled for this request", err);
-      return {
-        enabled: false,
-        requireName: false,
-        requireEmail: false,
-        collectPhone: false,
-        offerEmailUpdates: false
-      };
+      return POLICY_LOOKUP_DISABLED;
     });
     return html(
       200,
@@ -4216,11 +4214,14 @@ async function handlePortalRequest(req, config2) {
     return html(400, "<h1>Missing required fields</h1>");
   }
   if (config2.accessGate === true) {
+    const lookup = await config2.captureClient.getPolicy(propertyId).catch((err) => {
+      console.error("[portal] policy lookup failed during gate check", err);
+      return POLICY_LOOKUP_DISABLED;
+    });
     const supplied = normalizeAccessName(body["accessName"] ?? "");
-    const accepted = (config2.accessNames ?? []).map(normalizeAccessName).filter((s) => s.length > 0);
+    const accepted = [...config2.accessNames ?? [], ...lookup.accessNames].map(normalizeAccessName).filter((s) => s.length > 0);
     const matched = supplied.length > 0 && accepted.includes(supplied);
     if (!matched) {
-      const capturePolicy = await config2.captureClient.getPolicy(propertyId).catch(() => CAPTURE_POLICY_DISABLED);
       return html(
         200,
         renderSplashHtml({
@@ -4230,7 +4231,7 @@ async function handlePortalRequest(req, config2) {
           originalUrl,
           ssid: null,
           branding: config2.branding,
-          capturePolicy,
+          capturePolicy: lookup.policy,
           accessGate: true,
           errorMessage: accepted.length === 0 ? "Guest WiFi is not active right now. If you are a current guest, please contact your host." : "That name doesn\u2019t match the reservation. Please enter the last name used for the booking."
         })
@@ -4399,11 +4400,14 @@ function getGuestAuthService(settings) {
 var LogCaptureClient = class {
   async getPolicy() {
     return {
-      enabled: true,
-      requireName: false,
-      requireEmail: false,
-      collectPhone: true,
-      offerEmailUpdates: true
+      policy: {
+        enabled: true,
+        requireName: false,
+        requireEmail: false,
+        collectPhone: true,
+        offerEmailUpdates: true
+      },
+      accessNames: []
     };
   }
   async capture(input) {
@@ -4437,7 +4441,7 @@ var HttpCaptureClient = class {
     if (!response.ok) throw new Error(`capture policy HTTP ${response.status}`);
     const body = await response.json();
     if (!body.ok || !body.policy) throw new Error("capture policy response invalid");
-    return body.policy;
+    return { policy: body.policy, accessNames: body.accessNames ?? [] };
   }
   async capture(input) {
     const response = await fetch(`${this.baseUrl}/capture`, {
