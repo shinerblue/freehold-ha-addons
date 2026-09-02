@@ -4181,6 +4181,23 @@ var POLICY_LOOKUP_DISABLED = {
   policy: CAPTURE_POLICY_DISABLED,
   accessNames: []
 };
+var POLICY_CACHE_MS = 24 * 60 * 60 * 1e3;
+var lastGoodLookup = /* @__PURE__ */ new Map();
+async function lookupPolicy(config2, propertyId, where) {
+  try {
+    const lookup = await config2.captureClient.getPolicy(propertyId);
+    lastGoodLookup.set(propertyId, { lookup, at: Date.now() });
+    return lookup;
+  } catch (err) {
+    const cached = lastGoodLookup.get(propertyId);
+    if (cached && Date.now() - cached.at <= POLICY_CACHE_MS) {
+      console.error(`[portal] policy lookup failed (${where}); serving last-good copy from ${new Date(cached.at).toISOString()}`, err);
+      return cached.lookup;
+    }
+    console.error(`[portal] policy lookup failed (${where}); no fresh cache \u2014 capture disabled, gate fails closed`, err);
+    return POLICY_LOOKUP_DISABLED;
+  }
+}
 async function handlePortalRequest(req, config2) {
   if (req.method === "GET") {
     const hs = parseHandshake(req.query);
@@ -4188,10 +4205,7 @@ async function handlePortalRequest(req, config2) {
     if (!propertyId2) {
       return html(404, "<h1>Unknown network</h1><p>This WiFi network is not configured.</p>");
     }
-    const { policy: capturePolicy } = await config2.captureClient.getPolicy(propertyId2).catch((err) => {
-      console.error("[portal] policy lookup failed; capture disabled for this request", err);
-      return POLICY_LOOKUP_DISABLED;
-    });
+    const { policy: capturePolicy } = await lookupPolicy(config2, propertyId2, "splash");
     return html(
       200,
       renderSplashHtml({
@@ -4214,10 +4228,7 @@ async function handlePortalRequest(req, config2) {
     return html(400, "<h1>Missing required fields</h1>");
   }
   if (config2.accessGate === true) {
-    const lookup = await config2.captureClient.getPolicy(propertyId).catch((err) => {
-      console.error("[portal] policy lookup failed during gate check", err);
-      return POLICY_LOOKUP_DISABLED;
-    });
+    const lookup = await lookupPolicy(config2, propertyId, "gate");
     const supplied = normalizeAccessName(body["accessName"] ?? "");
     const accepted = [...config2.accessNames ?? [], ...lookup.accessNames].map(normalizeAccessName).filter((s) => s.length > 0);
     const matched = supplied.length > 0 && accepted.includes(supplied);
